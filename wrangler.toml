@@ -2,6 +2,9 @@ name = "accountant-payroll-management"
 main = "src/index.js"
 compatibility_date = "2026-10-31"
 
+[observability]
+enabled = true
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
