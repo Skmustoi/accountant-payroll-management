@@ -10,7 +10,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "accountant-payroll-db"
-database_id = "database_id = "9c36dba5-1b52-4a86-a8c8-f8b81d289a77"
+database_id = "9c36dba5-1b52-4a86-a8c8-f8b81d289a77"
 migrations_dir = "migrations"
 
 [vars]
