@@ -1,0 +1,17 @@
+name = "accountant-payroll-management"
+main = "src/index.js"
+compatibility_date = "2026-10-31"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "accountant-payroll-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+APP_NAME = "Accountant & Payroll Management"
