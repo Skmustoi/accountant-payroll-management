@@ -4,7 +4,7 @@ const b64 = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"
 const unb64 = s => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), c=>c.charCodeAt(0));
 async function hashPassword(password, salt=b64(crypto.getRandomValues(new Uint8Array(16)))) {
   const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({name:"PBKDF2",salt:unb64(salt),iterations:210000,hash:"SHA-256"}, key, 256);
+  const bits = await crypto.subtle.deriveBits({name:"PBKDF2",salt:unb64(salt),iterations:100000,hash:"SHA-256"}, key, 256);
   return `${salt}.${b64(bits)}`;
 }
 async function verifyPassword(password, stored) {
@@ -110,4 +110,4 @@ async function api(req, env) {
   }
   return json({error:"Not found"},404);
 }
-export default { async fetch(req,env,ctx) { const url=new URL(req.url); if(url.pathname.startsWith("/api/")) return api(req,env); return env.ASSETS.fetch(req); } };
+export default { async fetch(req,env,ctx) { const url=new URL(req.url); if(url.pathname.startsWith("/api/")) { try { return await api(req,env); } catch(e) { return json({error:"Server error: "+e.message},500); } } return env.ASSETS.fetch(req); } };
