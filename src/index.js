@@ -119,6 +119,19 @@ async function api(req, env) {
     const rows=(await env.DB.prepare("SELECT * FROM personal_salary_records ORDER BY pay_month DESC").all()).results;
     return json({exportedAt:new Date().toISOString(),records:rows});
   }
+  // Personal salary settings (joining date, basic, food allowance, overtime rules)
+  if(path==="/api/salary-settings" && method==="GET"){
+    return json((await env.DB.prepare("SELECT * FROM personal_settings WHERE id=1").first())||{});
+  }
+  if(path==="/api/salary-settings" && method==="PUT"){
+    const b=await body(req), j=String(b.joining_date||""), basic=Number(b.basic_salary||0), al=Number(b.allowances||0),
+      hours=Number(b.hours_per_month||240), mult=Number(b.ot_multiplier||1.5), base=b.ot_base==="basic"?"basic":"total";
+    if(j && !/^\d{4}-\d{2}-\d{2}$/.test(j)) return json({error:"Please choose a valid joining date"},400);
+    if([basic,al,hours,mult].some(v=>!Number.isFinite(v)||v<0)||hours<=0||mult<=0||mult>3) return json({error:"Please enter valid numbers"},400);
+    await env.DB.prepare("INSERT INTO personal_settings(id,joining_date,basic_salary,allowances,hours_per_month,ot_multiplier,ot_base) VALUES(1,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET joining_date=excluded.joining_date,basic_salary=excluded.basic_salary,allowances=excluded.allowances,hours_per_month=excluded.hours_per_month,ot_multiplier=excluded.ot_multiplier,ot_base=excluded.ot_base")
+      .bind(j,basic,al,hours,mult,base).run();
+    return json({ok:true});
+  }
   // Personal advances/loans and bills I paid myself (kind: advance | bill)
   const itemMatch=path.match(/^\/api\/items\/(\d+)$/);
   if(path==="/api/items" && method==="GET"){
