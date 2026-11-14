@@ -6,3 +6,8 @@ html[dir="rtl"] body{font-family:'Noto Sans Arabic','DM Sans',Arial,sans-serif}h
 @media print{body{background:white}.app-shell{padding:0}.topbar,.bottom-nav,footer,.welcome-row>.btn,.record-actions,.report-panel .form-actions{display:none!important}.page-content{padding:0}.record-card,.stat-card,.panel{box-shadow:none;break-inside:avoid}.stats-grid{grid-template-columns:repeat(2,1fr)}}
 .status.is-missing{background:#fde8e8;color:#b42318}
 .bottom-nav button{min-width:0;font-size:9.5px}
+.head-actions{display:flex;gap:8px;flex-wrap:wrap}
+.plan-lines{display:grid;gap:2px}
+.plan-lines div{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(120,130,150,.25)}
+.plan-lines .total{font-weight:700}
+.plan-lines .neg b{color:#b42318}
