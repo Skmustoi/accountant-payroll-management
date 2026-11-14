@@ -63,6 +63,62 @@ async function api(req, env) {
   const user=await getUser(req,env);
   if(path==="/api/me") return user?json({user:{username:user.username}}):json({error:"Unauthorized"},401);
   if(!user) return json({error:"Please log in"},401);
+  // Personal salary tracker endpoints. Existing company/payroll endpoints are retained.
+  if(path==="/api/salary-records" && method==="GET"){
+    return json((await env.DB.prepare("SELECT * FROM personal_salary_records ORDER BY pay_month DESC").all()).results);
+  }
+  if(path==="/api/salary-records" && method==="POST"){
+    const b=await body(req);
+    const month=String(b.pay_month||"");
+    if(!/^\d{4}-\d{2}$/.test(month)) return json({error:"Please choose a valid salary month"},400);
+    const basic=Number(b.basic_salary||0), hours=Number(b.overtime_hours||0),
+      overtime=Number(b.overtime_amount||0), allowances=Number(b.allowances||0),
+      deductions=Number(b.deductions||0);
+    if([basic,hours,overtime,allowances,deductions].some(v=>!Number.isFinite(v)||v<0))
+      return json({error:"Amounts and hours must be valid non-negative numbers"},400);
+    const net=basic+overtime+allowances-deductions;
+    try {
+      const r=await env.DB.prepare("INSERT INTO personal_salary_records(pay_month,basic_salary,overtime_hours,overtime_amount,allowances,deductions,net_salary,payment_date,status,notes) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        .bind(month,basic,hours,overtime,allowances,deductions,net,String(b.payment_date||""),b.status==="paid"?"paid":"unpaid",String(b.notes||"")).run();
+      return json({ok:true,id:r.meta.last_row_id,net_salary:net},201);
+    } catch(e) { return json({error:e.message.includes("UNIQUE")?"A salary record already exists for this month. Edit or delete it first.":e.message},400); }
+  }
+  const salaryMatch=path.match(/^\/api\/salary-records\/(\d+)$/);
+  if(salaryMatch && method==="PUT"){
+    const b=await body(req), id=Number(salaryMatch[1]);
+    const month=String(b.pay_month||"");
+    if(!/^\d{4}-\d{2}$/.test(month)) return json({error:"Please choose a valid salary month"},400);
+    const basic=Number(b.basic_salary||0), hours=Number(b.overtime_hours||0),
+      overtime=Number(b.overtime_amount||0), allowances=Number(b.allowances||0),
+      deductions=Number(b.deductions||0);
+    if([basic,hours,overtime,allowances,deductions].some(v=>!Number.isFinite(v)||v<0))
+      return json({error:"Amounts and hours must be valid non-negative numbers"},400);
+    const net=basic+overtime+allowances-deductions;
+    try {
+      await env.DB.prepare("UPDATE personal_salary_records SET pay_month=?,basic_salary=?,overtime_hours=?,overtime_amount=?,allowances=?,deductions=?,net_salary=?,payment_date=?,status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(month,basic,hours,overtime,allowances,deductions,net,String(b.payment_date||""),b.status==="paid"?"paid":"unpaid",String(b.notes||""),id).run();
+      return json({ok:true,net_salary:net});
+    } catch(e) { return json({error:e.message.includes("UNIQUE")?"A salary record already exists for this month.":e.message},400); }
+  }
+  if(salaryMatch && method==="DELETE"){
+    await env.DB.prepare("DELETE FROM personal_salary_records WHERE id=?").bind(Number(salaryMatch[1])).run();
+    return json({ok:true});
+  }
+  if(path==="/api/salary-summary" && method==="GET"){
+    const month=new Date().toISOString().slice(0,7), year=month.slice(0,4);
+    const [current,total,paid,pending,yearTotal]=await Promise.all([
+      env.DB.prepare("SELECT COALESCE(SUM(net_salary),0) total FROM personal_salary_records WHERE pay_month=?").bind(month).first(),
+      env.DB.prepare("SELECT COALESCE(SUM(net_salary),0) total FROM personal_salary_records").first(),
+      env.DB.prepare("SELECT COALESCE(SUM(net_salary),0) total FROM personal_salary_records WHERE status='paid'").first(),
+      env.DB.prepare("SELECT COALESCE(SUM(net_salary),0) total FROM personal_salary_records WHERE status='unpaid'").first(),
+      env.DB.prepare("SELECT COALESCE(SUM(net_salary),0) total FROM personal_salary_records WHERE substr(pay_month,1,4)=?").bind(year).first()
+    ]);
+    return json({month,currentMonth:current.total,total:total.total,paid:paid.total,pending:pending.total,yearTotal:yearTotal.total,year});
+  }
+  if(path==="/api/salary-export" && method==="GET"){
+    const rows=(await env.DB.prepare("SELECT * FROM personal_salary_records ORDER BY pay_month DESC").all()).results;
+    return json({exportedAt:new Date().toISOString(),records:rows});
+  }
   if(path==="/api/dashboard"){
     const [employees, payroll, expenses, advances]=await Promise.all([
       env.DB.prepare("SELECT COUNT(*) n FROM employees WHERE active=1").first(),
