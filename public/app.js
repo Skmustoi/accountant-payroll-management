@@ -8,7 +8,7 @@ const words = {
 };
 const t=k=>words[lang][k]||k;
 async function api(path,opt={}){const r=await fetch("/api"+path,{credentials:"same-origin",headers:{"content-type":"application/json"},...opt});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.error||t("error"));return d}
-function shell(content){document.documentElement.lang=lang;document.document.documentElement.dir=lang==="ar"?"rtl":"ltr";$("#app").innerHTML=`<main class="app-shell">
+function shell(content){document.documentElement.lang=lang;document.documentElement.dir=lang==="ar"?"rtl":"ltr";$("#app").innerHTML=`<main class="app-shell">
 <header class="topbar"><a class="brand" href="#" id="home-link"><span class="brand-mark">S</span><span><b>${t("brand")}</b><small>${t("sub")}</small></span></a><div class="top-actions"><button class="btn btn-light" id="language">${t("language")}</button><button class="btn btn-light" id="logout">${t("logout")}</button></div></header>
 <nav class="bottom-nav">${["dashboard","records","reports"].map(p=>`<button data-page="${p}" class="${page===p?"active":""}"><span>${p==="dashboard"?"⌂":p==="records"?"▤":"▥"}</span>${t(p)}</button>`).join("")}</nav>
 <section class="page-content">${content}</section><footer>PERSONAL FINANCE · SAR</footer></main>`;
