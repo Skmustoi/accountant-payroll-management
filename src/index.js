@@ -138,18 +138,30 @@ async function api(req, env) {
     return json((await env.DB.prepare("SELECT * FROM personal_items ORDER BY item_date DESC, id DESC").all()).results);
   }
   if((path==="/api/items" && method==="POST")||(itemMatch && method==="PUT")){
-    const b=await body(req), kind=b.kind==="bill"?"bill":"advance", title=String(b.title||"").trim().slice(0,120);
+    const b=await body(req), kind=["bill","overtime"].includes(b.kind)?b.kind:"advance", title=String(b.title||"").trim().slice(0,120);
     const date=String(b.item_date||""), amount=Number(b.amount), settled=Number(b.settled_amount||0), notes=String(b.notes||"").slice(0,250);
+    const hours=Number(b.hours||0), mult=Number(b.multiplier||1);
     if(!title) return json({error:"Title is required"},400);
     if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({error:"Please choose a valid date"},400);
-    if(!Number.isFinite(amount)||amount<=0||!Number.isFinite(settled)||settled<0) return json({error:"Amounts must be valid numbers"},400);
+    if(!Number.isFinite(amount)||amount<=0||!Number.isFinite(settled)||settled<0||!Number.isFinite(hours)||hours<0||!Number.isFinite(mult)||mult<=0||mult>3) return json({error:"Amounts must be valid numbers"},400);
     const done=Math.min(settled,amount), status=done>=amount?"settled":"open";
-    if(itemMatch){
-      await env.DB.prepare("UPDATE personal_items SET kind=?,title=?,item_date=?,amount=?,settled_amount=?,status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(kind,title,date,amount,done,status,notes,Number(itemMatch[1])).run();
-      return json({ok:true});
+    try{
+      if(itemMatch){
+        await env.DB.prepare("UPDATE personal_items SET kind=?,title=?,item_date=?,amount=?,settled_amount=?,status=?,notes=?,hours=?,multiplier=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(kind,title,date,amount,done,status,notes,hours,mult,Number(itemMatch[1])).run();
+        return json({ok:true});
+      }
+      const r=await env.DB.prepare("INSERT INTO personal_items(kind,title,item_date,amount,settled_amount,status,notes,hours,multiplier) VALUES(?,?,?,?,?,?,?,?,?)").bind(kind,title,date,amount,done,status,notes,hours,mult).run();
+      return json({ok:true,id:r.meta.last_row_id},201);
+    }catch(e){
+      if(!/no such column|no column named|has no column/i.test(String(e.message))) throw e;
+      if(kind==="overtime") return json({error:"Please run the 0005 SQL in D1 Console first (adds overtime hours columns)."},400);
+      if(itemMatch){
+        await env.DB.prepare("UPDATE personal_items SET kind=?,title=?,item_date=?,amount=?,settled_amount=?,status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(kind,title,date,amount,done,status,notes,Number(itemMatch[1])).run();
+        return json({ok:true});
+      }
+      const r=await env.DB.prepare("INSERT INTO personal_items(kind,title,item_date,amount,settled_amount,status,notes) VALUES(?,?,?,?,?,?,?)").bind(kind,title,date,amount,done,status,notes).run();
+      return json({ok:true,id:r.meta.last_row_id},201);
     }
-    const r=await env.DB.prepare("INSERT INTO personal_items(kind,title,item_date,amount,settled_amount,status,notes) VALUES(?,?,?,?,?,?,?)").bind(kind,title,date,amount,done,status,notes).run();
-    return json({ok:true,id:r.meta.last_row_id},201);
   }
   if(itemMatch && method==="DELETE"){
     await env.DB.prepare("DELETE FROM personal_items WHERE id=?").bind(Number(itemMatch[1])).run();
