@@ -16,8 +16,8 @@ async function sign(value, secret) {
   const key = await crypto.subtle.importKey("raw",enc.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
   return b64(await crypto.subtle.sign("HMAC",key,enc.encode(value)));
 }
-async function sessionToken(user, secret) {
-  const payload=b64(enc.encode(JSON.stringify({id:user.id,username:user.username,exp:Date.now()+86400000})));
+async function sessionToken(user, secret, ttl=86400000) {
+  const payload=b64(enc.encode(JSON.stringify({id:user.id,username:user.username,exp:Date.now()+ttl})));
   return `${payload}.${await sign(payload,secret)}`;
 }
 async function getUser(req, env) {
@@ -50,16 +50,60 @@ async function api(req, env) {
     const hashed=await hashPassword(String(b.password));
     const result=await env.DB.prepare("INSERT INTO users(username,password_hash) VALUES(?,?)").bind(String(b.username),hashed).run();
     const user={id:result.meta.last_row_id,username:String(b.username)};
-    const token=await sessionToken(user,env.SESSION_SECRET||"CHANGE_THIS_SECRET");
-    return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":cookie(token)}});
+    const token=await sessionToken(user,env.SESSION_SECRET||"CHANGE_THIS_SECRET",30*86400000);
+    return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":cookie(token,30*86400)}});
   }
   if(path==="/api/login" && method==="POST"){
     const b=await body(req), user=await env.DB.prepare("SELECT * FROM users WHERE username=?").bind(String(b.username||"")).first();
     if(!user||!(await verifyPassword(String(b.password||""),user.password_hash))) return json({error:"Invalid username or password"},401);
-    const token=await sessionToken(user,env.SESSION_SECRET||"CHANGE_THIS_SECRET");
-    return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":cookie(token)}});
+    const days=(b.remember==="on"||b.remember===true||b.remember==="true")?30:1;
+    const token=await sessionToken(user,env.SESSION_SECRET||"CHANGE_THIS_SECRET",days*86400000);
+    return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":cookie(token,days*86400)}});
   }
   if(path==="/api/logout" && method==="POST") return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":cookie("",0)}});
+  if(path==="/api/forgot-password" && method==="POST"){
+    const secret=env.SESSION_SECRET||"CHANGE_THIS_SECRET";
+    if(!env.RESEND_API_KEY) return json({error:"Email is not set up yet. Add a Secret named RESEND_API_KEY in Cloudflare, or use the reset key option."},400);
+    const u=await env.DB.prepare("SELECT * FROM users ORDER BY id LIMIT 1").first();
+    if(!u) return json({error:"No account exists yet"},400);
+    const to=String(env.RESET_EMAIL||"").trim()||(String(u.username).includes("@")?String(u.username).trim():"");
+    if(!to) return json({error:"No email address found. Add a Variable named RESET_EMAIL in Cloudflare."},400);
+    try{
+      const st=await env.DB.prepare("SELECT last_reset_at FROM auth_state WHERE id=1").first();
+      if(st && Date.now()-Number(st.last_reset_at)<120000) return json({error:"Please wait 2 minutes before asking for another email."},429);
+      await env.DB.prepare("INSERT INTO auth_state(id,last_reset_at) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_reset_at=excluded.last_reset_at").bind(Date.now()).run();
+    }catch{}
+    const payload=b64(enc.encode(JSON.stringify({u:u.id,exp:Date.now()+30*60000,p:(await sign(String(u.password_hash),secret)).slice(0,16)})));
+    const token=`${payload}.${await sign("reset."+payload,secret)}`;
+    const link=`${new URL(req.url).origin}/#reset=${encodeURIComponent(token)}`;
+    const text=`Reset your My Salary password:\n${link}\n\nThis link works once and expires in 30 minutes. If you did not ask for this, ignore this email.\n\nDeveloped by Salman Khan`;
+    const html=`<div style="font-family:Arial,sans-serif;max-width:480px"><h2>Reset your password</h2><p>Tap the button to choose a new password for <b>My Salary</b>.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#3d6bf0;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold">Reset password</a></p><p style="color:#666;font-size:13px">This link works once and expires in 30 minutes. If you did not ask for this, ignore this email.</p><p style="color:#999;font-size:12px">Developed by Salman Khan</p></div>`;
+    const r=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:"My Salary <onboarding@resend.dev>",to:[to],subject:"Reset your My Salary password",html,text})});
+    if(!r.ok){let m="";try{m=(await r.json()).message||""}catch{} return json({error:"The email could not be sent. "+m},502)}
+    return json({ok:true,to:to.replace(/^(.{2}).*(@.*)$/,"$1***$2")});
+  }
+  if(path==="/api/reset-password" && method==="POST"){
+    const b=await body(req), pw=String(b.password||""), secret=env.SESSION_SECRET||"CHANGE_THIS_SECRET";
+    if(pw.length<10) return json({error:"Password must be at least 10 characters"},400);
+    if(b.token){
+      const [pl,sig]=String(b.token).split(".");
+      if(!pl||!sig||sig!==await sign("reset."+pl,secret)) return json({error:"This reset link is not valid."},400);
+      let d; try{ d=JSON.parse(new TextDecoder().decode(unb64(pl))); }catch{ return json({error:"This reset link is not valid."},400); }
+      if(!d||d.exp<Date.now()) return json({error:"This reset link has expired. Please ask for a new one."},400);
+      const u=await env.DB.prepare("SELECT * FROM users WHERE id=?").bind(Number(d.u)).first();
+      if(!u||(await sign(String(u.password_hash),secret)).slice(0,16)!==d.p) return json({error:"This reset link was already used. Please ask for a new one."},400);
+      await env.DB.prepare("UPDATE users SET password_hash=? WHERE id=?").bind(await hashPassword(pw),u.id).run();
+      return json({ok:true});
+    }
+    const key=String(b.reset_key||""), real=String(env.RESET_KEY||"");
+    if(real.length<12) return json({error:"Reset key is not set in Cloudflare yet. Add a Secret named RESET_KEY (at least 12 characters) first."},400);
+    let diff=key.length^real.length; for(let i=0;i<real.length;i++) diff|=(key.charCodeAt(i)||0)^real.charCodeAt(i);
+    if(diff!==0){ await new Promise(r=>setTimeout(r,1000)); return json({error:"Wrong reset key"},403); }
+    const u=await env.DB.prepare("SELECT id FROM users ORDER BY id LIMIT 1").first();
+    if(!u) return json({error:"No account exists yet"},400);
+    await env.DB.prepare("UPDATE users SET password_hash=? WHERE id=?").bind(await hashPassword(pw),u.id).run();
+    return json({ok:true});
+  }
   const user=await getUser(req,env);
   if(path==="/api/me") return user?json({user:{username:user.username}}):json({error:"Unauthorized"},401);
   if(!user) return json({error:"Please log in"},401);
@@ -138,7 +182,7 @@ async function api(req, env) {
     return json((await env.DB.prepare("SELECT * FROM personal_items ORDER BY item_date DESC, id DESC").all()).results);
   }
   if((path==="/api/items" && method==="POST")||(itemMatch && method==="PUT")){
-    const b=await body(req), kind=["bill","overtime"].includes(b.kind)?b.kind:"advance", title=String(b.title||"").trim().slice(0,120);
+    const b=await body(req), kind=["bill","overtime","lent"].includes(b.kind)?b.kind:"advance", title=String(b.title||"").trim().slice(0,120);
     const date=String(b.item_date||""), amount=Number(b.amount), settled=Number(b.settled_amount||0), notes=String(b.notes||"").slice(0,250);
     const hours=Number(b.hours||0), mult=Number(b.multiplier||1);
     if(!title) return json({error:"Title is required"},400);
